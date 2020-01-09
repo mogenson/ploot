@@ -1,12 +1,18 @@
 use float_pretty_print::PrettyPrintFloat as ppf;
 use std::f64;
-use std::io::stdout;
+use std::io::Error;
+use std::io::{stdout, Read};
+use std::result::Result;
+use std::sync::mpsc;
+use std::thread;
 use termion::raw::IntoRawMode;
 use termion::screen::AlternateScreen;
 use tui::backend::TermionBackend;
 use tui::style::{Color, Style};
 use tui::widgets::{Axis, Block, Borders, Chart, Dataset, Marker, Widget};
 use tui::Terminal;
+
+use termion::get_tty;
 
 /* TODO:
  * read terminal size each loop, resize vectors
@@ -75,6 +81,19 @@ impl App {
     }
 }
 
+fn input_reader(stream: impl Read + Send + Sync + 'static) -> mpsc::Receiver<Result<u8, Error>> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        for i in stream.bytes() {
+            if tx.send(i).is_err() {
+                return;
+            }
+        }
+    });
+
+    rx
+}
+
 fn main() -> Result<(), failure::Error> {
     // Terminal initialization
     let stdout = stdout();
@@ -87,6 +106,8 @@ fn main() -> Result<(), failure::Error> {
     // App
     let size = terminal.size()?;
     let mut app = App::new(size.width as usize);
+
+    let tty_rx = input_reader(get_tty().unwrap());
 
     loop {
         terminal.draw(|mut f| {
@@ -131,6 +152,10 @@ fn main() -> Result<(), failure::Error> {
         })?;
 
         if app.update()? {
+            break;
+        }
+
+        if let Ok(Ok(0x03)) = tty_rx.try_recv() {
             break;
         }
     }
