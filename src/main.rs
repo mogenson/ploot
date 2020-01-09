@@ -29,7 +29,6 @@ struct App {
     max: f64,
     avg: f64,
     cur: f64,
-    count: usize,
 }
 
 impl App {
@@ -43,41 +42,24 @@ impl App {
             max: 0.0,
             avg: 0.0,
             cur: 0.0,
-            count: 0,
         }
     }
 
-    fn update(&mut self) -> Result<bool, failure::Error> {
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
-        // let input = input.split_whitespace().next().unwrap();
-        // let y:f64 = input.parse()?;
-
-        let vec = input
-            .split_whitespace()
-            .filter_map(|s| s.parse::<f64>().ok())
-            .collect::<Vec<f64>>();
-        if vec.is_empty() {
-            return Ok(false);
-        }
-        let y = vec[0];
-
+    fn update(&mut self, point: (f64, f64)) {
         if self.data.len() >= self.width {
             self.data.remove(0);
             self.window[0] += 1.0;
             self.window[1] += 1.0;
         }
-        self.data.push(((self.count as f64), y));
-        self.count += 1;
-        self.cur = y;
-        if y > self.max {
-            self.max = y;
+        self.data.push(point);
+        self.cur = point.1;
+        if self.cur > self.max {
+            self.max = self.cur;
         }
-        if y < self.min {
-            self.min = y;
+        if self.cur < self.min {
+            self.min = self.cur;
         }
-        self.avg = self.avg + y - (self.avg / (self.data.len() as f64));
-        Ok(false)
+        self.avg = self.avg + self.cur - (self.avg / (self.data.len() as f64));
     }
 }
 
@@ -94,7 +76,7 @@ fn input_reader(stream: impl Read + Send + Sync + 'static) -> mpsc::Receiver<Res
     rx
 }
 
-fn main() -> Result<(), failure::Error> {
+fn main() -> Result<(), Error> {
     // Terminal initialization
     let stdout = stdout();
     let stdout = stdout.lock().into_raw_mode()?;
@@ -106,8 +88,9 @@ fn main() -> Result<(), failure::Error> {
     // App
     let size = terminal.size()?;
     let mut app = App::new(size.width as usize);
+    let mut count: f64 = 0.0;
 
-    let tty_rx = input_reader(get_tty().unwrap());
+    let tty_rx = input_reader(get_tty()?);
 
     loop {
         terminal.draw(|mut f| {
@@ -151,12 +134,19 @@ fn main() -> Result<(), failure::Error> {
                 .render(&mut f, size);
         })?;
 
-        if app.update()? {
+        if let Ok(Ok(0x03)) = tty_rx.try_recv() {
             break;
         }
 
-        if let Ok(Ok(0x03)) = tty_rx.try_recv() {
-            break;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        let vec = input
+            .split_whitespace()
+            .filter_map(|s| s.parse::<f64>().ok())
+            .collect::<Vec<f64>>();
+        if !vec.is_empty() {
+            app.update((count, vec[0]));
+            count += 1.0;
         }
     }
 
