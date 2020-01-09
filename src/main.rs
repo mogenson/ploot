@@ -1,11 +1,10 @@
 use float_pretty_print::PrettyPrintFloat as ppf;
 use std::f64;
-use std::io::Error;
-use std::io::{stdout, Read};
+use std::io::{stdin, stdout, Error, Read, StdoutLock};
 use std::result::Result;
 use std::sync::mpsc;
 use std::thread;
-use termion::raw::IntoRawMode;
+use termion::raw::{IntoRawMode, RawTerminal};
 use termion::screen::AlternateScreen;
 use tui::backend::TermionBackend;
 use tui::style::{Color, Style};
@@ -20,6 +19,9 @@ use termion::get_tty;
  * clap arguments
  * show min / max/ avg for current window
  */
+
+const NL: u8 = 0x0A; // ascii new line ('\n')
+const ETX: u8 = 0x03; // ascii end transmision (ctrl-c)
 
 struct App {
     data: Vec<(f64, f64)>,
@@ -63,7 +65,7 @@ impl App {
     }
 }
 
-fn input_reader(stream: impl Read + Send + Sync + 'static) -> mpsc::Receiver<Result<u8, Error>> {
+fn reader(stream: impl Read + Send + Sync + 'static) -> mpsc::Receiver<Result<u8, Error>> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         for i in stream.bytes() {
@@ -74,6 +76,53 @@ fn input_reader(stream: impl Read + Send + Sync + 'static) -> mpsc::Receiver<Res
     });
 
     rx
+}
+
+fn plot(
+    terminal: &mut Terminal<TermionBackend<AlternateScreen<RawTerminal<StdoutLock>>>>,
+    app: &mut App,
+) -> Result<(), Error> {
+    terminal.draw(|mut f| {
+        let size = f.size();
+        Chart::default()
+            .block(Block::default().title("ttyplot-rs").borders(Borders::ALL))
+            .x_axis(Axis::default().bounds(app.window).labels(&[
+                &format!("{:.0}", app.window[0]),
+                &format!(
+                    "{:.0}",
+                    0.25 * (app.window[1] - app.window[0]) + app.window[0]
+                ),
+                &format!(
+                    "{:.0}",
+                    0.50 * (app.window[1] - app.window[0]) + app.window[0]
+                ),
+                &format!(
+                    "{:.0}",
+                    0.75 * (app.window[1] - app.window[0]) + app.window[0]
+                ),
+                &format!("{:.0}", app.window[1]),
+            ]))
+            .y_axis(Axis::default().bounds([app.min, app.max]).labels(&[
+                &format!("{:1.5}", ppf(app.min)),
+                &format!("{:1.5}", ppf(0.25 * (app.max - app.min) + app.min)),
+                &format!("{:1.5}", ppf(0.50 * (app.max - app.min) + app.min)),
+                &format!("{:1.5}", ppf(0.75 * (app.max - app.min) + app.min)),
+                &format!("{:1.5}", ppf(app.max)),
+            ]))
+            .datasets(&[Dataset::default()
+                .name(&format!(
+                    "Cur: {:1.5} Min: {:1.5} Max: {:1.5} Avg: {:1.5}",
+                    ppf(app.cur),
+                    ppf(app.min),
+                    ppf(app.max),
+                    ppf(app.avg)
+                ))
+                .marker(Marker::Braille)
+                .style(Style::default().fg(Color::Red))
+                .data(&app.data)])
+            .render(&mut f, size);
+    })?;
+    Ok(())
 }
 
 fn main() -> Result<(), Error> {
@@ -90,63 +139,37 @@ fn main() -> Result<(), Error> {
     let mut app = App::new(size.width as usize);
     let mut count: f64 = 0.0;
 
-    let tty_rx = input_reader(get_tty()?);
+    let pipe = reader(stdin());
+    let tty = reader(get_tty()?);
+
+    let mut new_data = true;
+    let mut input = String::new();
 
     loop {
-        terminal.draw(|mut f| {
-            let size = f.size();
-            Chart::default()
-                .block(Block::default().title("ttyplot-rs").borders(Borders::ALL))
-                .x_axis(Axis::default().bounds(app.window).labels(&[
-                    &format!("{:.0}", app.window[0]),
-                    &format!(
-                        "{:.0}",
-                        0.25 * (app.window[1] - app.window[0]) + app.window[0]
-                    ),
-                    &format!(
-                        "{:.0}",
-                        0.50 * (app.window[1] - app.window[0]) + app.window[0]
-                    ),
-                    &format!(
-                        "{:.0}",
-                        0.75 * (app.window[1] - app.window[0]) + app.window[0]
-                    ),
-                    &format!("{:.0}", app.window[1]),
-                ]))
-                .y_axis(Axis::default().bounds([app.min, app.max]).labels(&[
-                    &format!("{:1.5}", ppf(app.min)),
-                    &format!("{:1.5}", ppf(0.25 * (app.max - app.min) + app.min)),
-                    &format!("{:1.5}", ppf(0.50 * (app.max - app.min) + app.min)),
-                    &format!("{:1.5}", ppf(0.75 * (app.max - app.min) + app.min)),
-                    &format!("{:1.5}", ppf(app.max)),
-                ]))
-                .datasets(&[Dataset::default()
-                    .name(&format!(
-                        "Cur: {:1.5} Min: {:1.5} Max: {:1.5} Avg: {:1.5}",
-                        ppf(app.cur),
-                        ppf(app.min),
-                        ppf(app.max),
-                        ppf(app.avg)
-                    ))
-                    .marker(Marker::Braille)
-                    .style(Style::default().fg(Color::Red))
-                    .data(&app.data)])
-                .render(&mut f, size);
-        })?;
+        if new_data {
+            plot(&mut terminal, &mut app)?;
+            new_data = false;
+        }
 
-        if let Ok(Ok(0x03)) = tty_rx.try_recv() {
+        if let Ok(Ok(ETX)) = tty.try_recv() {
             break;
         }
 
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
-        let vec = input
-            .split_whitespace()
-            .filter_map(|s| s.parse::<f64>().ok())
-            .collect::<Vec<f64>>();
-        if !vec.is_empty() {
-            app.update((count, vec[0]));
-            count += 1.0;
+        if let Ok(Ok(c)) = pipe.try_recv() {
+            if c == NL {
+                let vec = input
+                    .split_whitespace()
+                    .filter_map(|s| s.parse::<f64>().ok())
+                    .collect::<Vec<f64>>();
+                if !vec.is_empty() {
+                    app.update((count, vec[0]));
+                    count += 1.0;
+                    new_data = true;
+                }
+                input.clear();
+            } else {
+                input.push(c as char);
+            }
         }
     }
 
