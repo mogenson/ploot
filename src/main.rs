@@ -1,4 +1,5 @@
 use float_pretty_print::PrettyPrintFloat as ppf;
+use std::cmp::max;
 use std::f64;
 use std::io::{stdin, stdout, Error, Read};
 use std::result::Result;
@@ -8,8 +9,9 @@ use termion::get_tty;
 use termion::raw::IntoRawMode;
 use termion::screen::AlternateScreen;
 use tui::backend::TermionBackend;
+use tui::layout::Alignment;
 use tui::style::{Color, Style};
-use tui::widgets::{Axis, Block, Borders, Chart, Dataset, Marker, Widget};
+use tui::widgets::{Axis, Block, Borders, Chart, Dataset, Marker, Paragraph, Text, Widget};
 use tui::Terminal;
 
 /* TODO:
@@ -41,7 +43,7 @@ fn main() -> Result<(), Error> {
     let mut terminal = Terminal::new(backend)?;
     terminal.hide_cursor()?;
 
-    let mut count: usize = 0;
+    let mut count: i32 = 0;
     let pipe = reader(stdin());
     let tty = reader(get_tty()?);
     let mut input = String::new();
@@ -59,9 +61,13 @@ fn main() -> Result<(), Error> {
 
     terminal.draw(|mut frame| {
         let size = frame.size();
-        Block::default()
-            .title("Waiting for data...")
-            .borders(Borders::ALL)
+        let text = vec![
+            Text::raw("Waiting for data...\n"),
+            Text::raw("CTRL-C to exit\n"),
+        ];
+        Paragraph::new(text.iter())
+            .block(Block::default().title("ttyplot-rs").borders(Borders::ALL))
+            .alignment(Alignment::Center)
             .render(&mut frame, size);
     })?;
 
@@ -71,11 +77,12 @@ fn main() -> Result<(), Error> {
         }
 
         if let Ok(Ok(c)) = pipe.try_recv() {
-            if c != '\n' as u8 {
+            if c != b'\n' {
                 input.push(c as char);
                 continue;
             }
 
+            // parse input string as vector of floats
             let new_data = input
                 .split_whitespace()
                 .filter_map(|s| s.parse::<f64>().ok())
@@ -87,106 +94,103 @@ fn main() -> Result<(), Error> {
 
             terminal.draw(|mut frame| {
                 let size = frame.size();
-                let width = size.width;
-                let window = [count as f64 - width as f64, count as f64];
+                let width = size.width as i32 - 8; // y_label + margins = 8
+                let x_win = if count - width > 0 {
+                    [(count - width) as f64, count as f64] // [x_min, x_max]
+                } else {
+                    [0.0, width as f64]
+                };
 
-                for (i, d) in new_data.iter().enumerate() {
-                    if data.len() <= i {
-                        data.push(Vec::new()); // add new series
+                let mut y_win = [0.0f64; 2]; // [y_min, y_max]
+                let mut legends: Vec<String> = Vec::new();
+
+                for i in 0..max(data.len(), new_data.len()) {
+                    // trim old data points
+                    if i < data.len() {
+                        while !data[i].is_empty() {
+                            if data[i][0].0 < x_win[0] {
+                                data[i].remove(0);
+                            } else {
+                                break;
+                            }
+                        }
+                    } else {
+                        data.push(Vec::new()); // add new data series
                     }
-                    data[i].push((count as f64, *d)); // update series
-                }
-                count += 1;
 
-                for d in &mut data {
-                    d.retain(|&p| p.0 >= window[0]); // trim old points
-                }
+                    // add new data points
+                    if i < new_data.len() {
+                        data[i].push((count as f64, new_data[i]));
+                    }
 
-                data.retain(|d| !d.is_empty()); // trim old series
+                    // bail if empty
+                    if data[i].is_empty() {
+                        continue;
+                    }
 
-                // calculate min, max, avg for each series
-                let mut min: Vec<f64> = Vec::new();
-                let mut max: Vec<f64> = Vec::new();
-                let mut avg: Vec<f64> = Vec::new();
-                let mut global_min: f64 = 0.0;
-                let mut global_max: f64 = 0.0;
-
-                for d in &data {
+                    // legend with min, max, avg
                     let mut sum: f64 = 0.0;
-                    let mut local_min: f64 = 0.0;
-                    let mut local_max: f64 = 0.0;
-
-                    for p in d {
+                    let mut min: f64 = 0.0;
+                    let mut max: f64 = 0.0;
+                    for p in &data[i] {
                         sum += p.1;
-                        if p.1 < local_min {
-                            local_min = p.1;
+                        if p.1 < min {
+                            min = p.1;
                         }
-                        if p.1 > local_max {
-                            local_max = p.1;
+                        if p.1 > max {
+                            max = p.1;
                         }
                     }
 
-                    if local_min < global_min {
-                        global_min = local_min;
+                    if min < y_win[0] {
+                        y_win[0] = min;
                     }
-                    if local_max > global_max {
-                        global_max = local_max;
+                    if max > y_win[1] {
+                        y_win[1] = max;
                     }
 
-                    min.push(local_min);
-                    max.push(local_max);
-                    avg.push(sum / d.len() as f64);
+                    legends.push(format!(
+                        "Cur: {:1.5} Min: {:1.5} Max: {:1.5} Avg: {:1.5}",
+                        ppf(data[i].last().unwrap().1),
+                        ppf(min),
+                        ppf(max),
+                        ppf(sum / data[i].len() as f64)
+                    ));
                 }
 
                 // make labels
                 let mut x_labels: Vec<String> = Vec::new();
                 let mut y_labels: Vec<String> = Vec::new();
                 for i in 0..5 {
-                    x_labels.push(format!(
-                        "{:.0}",
-                        i as f64 * 0.25 * (window[1] - window[0]) + window[0]
-                    ));
-                    y_labels.push(format!(
-                        "{:1.5}",
-                        ppf(i as f64 * 0.25 * (global_max - global_min) + global_min)
-                    ));
-                }
-
-                // make legend and dataset
-                let mut legends: Vec<String> = Vec::new();
-                for (i, d) in data.iter().enumerate() {
-                    legends.push(format!(
-                        "Cur: {:1.5} Min: {:1.5} Max: {:1.5} Avg: {:1.5}",
-                        ppf(d.last().unwrap().1),
-                        ppf(min[i]),
-                        ppf(max[i]),
-                        ppf(avg[i])
-                    ));
+                    let step = i as f64 * 0.25;
+                    x_labels.push(format!("{:.0}", step * (x_win[1] - x_win[0]) + x_win[0]));
+                    let y = format!("{:1.5}", ppf(step * (y_win[1] - y_win[0]) + y_win[0]));
+                    y_labels.push(format!("{:>5}", y));
                 }
 
                 // make datasets
                 let mut datasets: Vec<Dataset> = Vec::new();
                 for (i, d) in data.iter().enumerate() {
-                    datasets.push(
-                        Dataset::default()
-                            .name(&legends[i])
-                            .marker(Marker::Braille)
-                            .style(Style::default().fg(colors[i % colors.len()]))
-                            .data(d),
-                    );
+                    if !d.is_empty() {
+                        datasets.push(
+                            Dataset::default()
+                                .name(&legends[i])
+                                .marker(Marker::Braille)
+                                .style(Style::default().fg(colors[i % colors.len()]))
+                                .data(d),
+                        );
+                    }
                 }
 
+                // plot
                 Chart::default()
                     .block(Block::default().title("ttyplot-rs").borders(Borders::ALL))
-                    .x_axis(Axis::default().bounds(window).labels(&x_labels))
-                    .y_axis(
-                        Axis::default()
-                            .bounds([global_min, global_max])
-                            .labels(&y_labels),
-                    )
+                    .x_axis(Axis::default().bounds(x_win).labels(&x_labels))
+                    .y_axis(Axis::default().bounds(y_win).labels(&y_labels))
                     .datasets(&datasets)
                     .render(&mut frame, size);
             })?;
+            count += 1;
         }
     }
 
