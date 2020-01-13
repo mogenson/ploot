@@ -20,40 +20,6 @@ use termion::get_tty;
  * show min / max/ avg for current window
  */
 
-struct Series {
-    data: Vec<(f64, f64)>,
-    min: f64,
-    max: f64,
-    avg: f64,
-    cur: f64,
-}
-
-impl Series {
-    fn new() -> Series {
-        Series {
-            data: Vec::new(),
-            min: 0.0,
-            max: 0.0,
-            avg: 0.0,
-            cur: 0.0,
-        }
-    }
-    fn update(&mut self, width: usize, point: (f64, f64)) {
-        while self.data.len() > width {
-            self.data.remove(0);
-        }
-        self.data.push(point);
-        self.cur = point.1;
-        if self.cur > self.max {
-            self.max = self.cur;
-        }
-        if self.cur < self.min {
-            self.min = self.cur;
-        }
-        self.avg = self.avg + self.cur - (self.avg / (self.data.len() as f64));
-    }
-}
-
 fn reader(stream: impl Read + Send + Sync + 'static) -> mpsc::Receiver<Result<u8, Error>> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
@@ -76,11 +42,20 @@ fn main() -> Result<(), Error> {
     let mut terminal = Terminal::new(backend)?;
     terminal.hide_cursor()?;
 
-    let mut series = Series::new();
     let mut count: usize = 0;
     let pipe = reader(stdin());
     let tty = reader(get_tty()?);
     let mut input = String::new();
+
+    let mut data: Vec<(f64, f64)> = Vec::new();
+
+    terminal.draw(|mut frame| {
+        let size = frame.size();
+        Block::default()
+            .title("Waiting for data...")
+            .borders(Borders::ALL)
+            .render(&mut frame, size);
+    })?;
 
     loop {
         if let Ok(Ok(0x03)) = tty.try_recv() {
@@ -88,66 +63,72 @@ fn main() -> Result<(), Error> {
         }
 
         if let Ok(Ok(c)) = pipe.try_recv() {
-            if c == '\n' as u8 {
-                let vec = input
-                    .split_whitespace()
-                    .filter_map(|s| s.parse::<f64>().ok())
-                    .collect::<Vec<f64>>();
-                if !vec.is_empty() {
-                    let width = terminal.size()?.width as usize;
-                    series.update(width, (count as f64, vec[0]));
-                    terminal.draw(|mut frame| {
-                        let size = frame.size();
-                        let window = if count - width > 0 {
-                            [((count - width) as f64), (count as f64)]
-                        } else {
-                            [0.0, (width as f64)]
-                        };
-
-                        Chart::default()
-                            .block(Block::default().title("ttyplot-rs").borders(Borders::ALL))
-                            .x_axis(Axis::default().bounds(window).labels(&[
-                                &format!("{:.0}", window[0]),
-                                &format!("{:.0}", 0.25 * (window[1] - window[0]) + window[0]),
-                                &format!("{:.0}", 0.50 * (window[1] - window[0]) + window[0]),
-                                &format!("{:.0}", 0.75 * (window[1] - window[0]) + window[0]),
-                                &format!("{:.0}", window[1]),
-                            ]))
-                            .y_axis(Axis::default().bounds([series.min, series.max]).labels(&[
-                                &format!("{:1.5}", ppf(series.min)),
-                                &format!(
-                                    "{:1.5}",
-                                    ppf(0.25 * (series.max - series.min) + series.min)
-                                ),
-                                &format!(
-                                    "{:1.5}",
-                                    ppf(0.50 * (series.max - series.min) + series.min)
-                                ),
-                                &format!(
-                                    "{:1.5}",
-                                    ppf(0.75 * (series.max - series.min) + series.min)
-                                ),
-                                &format!("{:1.5}", ppf(series.max)),
-                            ]))
-                            .datasets(&[Dataset::default()
-                                .name(&format!(
-                                    "Cur: {:1.5} Min: {:1.5} Max: {:1.5} Avg: {:1.5}",
-                                    ppf(series.cur),
-                                    ppf(series.min),
-                                    ppf(series.max),
-                                    ppf(series.avg)
-                                ))
-                                .marker(Marker::Braille)
-                                .style(Style::default().fg(Color::Red))
-                                .data(&series.data)])
-                            .render(&mut frame, size);
-                    })?;
-                    count += 1;
-                }
-                input.clear();
-            } else {
+            if c != '\n' as u8 {
                 input.push(c as char);
+                continue;
             }
+
+            let v = input
+                .split_whitespace()
+                .filter_map(|s| s.parse::<f64>().ok())
+                .collect::<Vec<f64>>();
+            if v.is_empty() {
+                continue;
+            }
+            input.clear();
+
+            terminal.draw(|mut frame| {
+                let size = frame.size();
+                let width = size.width;
+                let window = [count as f64 - width as f64, count as f64];
+
+                data.push((count as f64, v[0])); // update
+                data.retain(|&p| p.0 >= window[0]); // trim
+                count += 1;
+                                                    // TODO check if empty
+                let mut sum: f64 = 0.0;
+                let mut min: f64 = 0.0;
+                let mut max: f64 = 0.0;
+                for p in &data {
+                    sum += p.1;
+                    if p.1 < min {
+                        min = p.1;
+                    }
+                    if p.1 > max {
+                        max = p.1;
+                    }
+                }
+                let avg: f64 = sum / data.len() as f64;
+
+                Chart::default()
+                    .block(Block::default().title("ttyplot-rs").borders(Borders::ALL))
+                    .x_axis(Axis::default().bounds(window).labels(&[
+                        &format!("{:.0}", window[0]),
+                        &format!("{:.0}", 0.25 * (window[1] - window[0]) + window[0]),
+                        &format!("{:.0}", 0.50 * (window[1] - window[0]) + window[0]),
+                        &format!("{:.0}", 0.75 * (window[1] - window[0]) + window[0]),
+                        &format!("{:.0}", window[1]),
+                    ]))
+                    .y_axis(Axis::default().bounds([min, max]).labels(&[
+                        &format!("{:1.5}", ppf(min)),
+                        &format!("{:1.5}", ppf(0.25 * (max - min) + min)),
+                        &format!("{:1.5}", ppf(0.50 * (max - min) + min)),
+                        &format!("{:1.5}", ppf(0.75 * (max - min) + min)),
+                        &format!("{:1.5}", ppf(max)),
+                    ]))
+                    .datasets(&[Dataset::default()
+                        .name(&format!(
+                            "Cur: {:1.5} Min: {:1.5} Max: {:1.5} Avg: {:1.5}",
+                            ppf(v[0]),
+                            ppf(min),
+                            ppf(max),
+                            ppf(avg)
+                        ))
+                        .marker(Marker::Braille)
+                        .style(Style::default().fg(Color::Red))
+                        .data(&data)])
+                    .render(&mut frame, size);
+            })?;
         }
     }
 

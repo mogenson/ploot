@@ -11,6 +11,6 @@ fn main() {
         let x = PI * start.elapsed().as_secs_f64();
         //println!("{}", x.sin());
         println!("{:.3} {:.3}", x.sin(), x.cos());
-        sleep(Duration::from_millis(100));
+        sleep(Duration::from_millis(50));
     }
 }
