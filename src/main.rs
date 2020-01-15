@@ -1,28 +1,53 @@
 use float_pretty_print::PrettyPrintFloat as ppf;
 use std::cmp::max;
 use std::f64;
-use std::io::{stdin, stdout, Error, Read};
+use std::io::{stdin, stdout, Cursor, Read};
 use std::result::Result;
-use std::sync::mpsc;
+use std::sync::mpsc::{channel, Receiver};
 use std::thread;
+use structopt::clap::Shell;
+use structopt::StructOpt;
 use termion::get_tty;
 use termion::raw::IntoRawMode;
 use termion::screen::AlternateScreen;
 use tui::backend::TermionBackend;
-use tui::layout::Alignment;
+use tui::layout::{Alignment, Constraint, Direction, Layout};
 use tui::style::{Color, Style};
 use tui::widgets::{Axis, Block, Borders, Chart, Dataset, Marker, Paragraph, Text, Widget};
 use tui::Terminal;
 
-/* TODO:
- * read terminal size each loop, resize vectors
- * vector of vectors for each data point
- * clap arguments
- * show min / max/ avg for current window
- */
+const MARGIN: u16 = 8;
 
-fn reader(stream: impl Read + Send + Sync + 'static) -> mpsc::Receiver<Result<u8, Error>> {
-    let (tx, rx) = mpsc::channel();
+#[derive(StructOpt)]
+#[structopt(about = "Plot streaming data from stdin to a tty terminal. \
+                     Useful for displaying data piped from a serial port or long running process. \
+                     To plot multiple data streams, separate data points with whitespace. \
+                     Use CTRL-C to quit.")]
+struct Opts {
+    #[structopt(
+        short,
+        long,
+        help = "Number of data points to display in window (default: terminal width)"
+    )]
+    width: Option<usize>,
+    #[structopt(
+        short = "M",
+        long,
+        help = "Upper bound of window (default: smallest data point in window)"
+    )]
+    max: Option<f64>,
+    #[structopt(
+        short = "m",
+        long,
+        help = "Lower bound of window (default: largest data point in window)"
+    )]
+    min: Option<f64>,
+    #[structopt(long = "completions", help = "Generate Bash tab-completion script")]
+    completions: bool,
+}
+
+fn reader(stream: impl Read + Send + Sync + 'static) -> Receiver<Result<u8, std::io::Error>> {
+    let (tx, rx) = channel();
     thread::spawn(move || {
         for i in stream.bytes() {
             if tx.send(i).is_err() {
@@ -34,7 +59,20 @@ fn reader(stream: impl Read + Send + Sync + 'static) -> mpsc::Receiver<Result<u8
     rx
 }
 
-fn main() -> Result<(), Error> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let opts: Opts = Opts::from_args();
+
+    if opts.completions {
+        println!(
+            "Generating Bash tab-completion script: {}.bash",
+            env!("CARGO_PKG_NAME")
+        );
+        Opts::clap().gen_completions(env!("CARGO_PKG_NAME"), Shell::Bash, ".");
+        return Ok(());
+    }
+
+    //    return Ok(());
+
     // Terminal initialization
     let stdout = stdout();
     let stdout = stdout.lock().into_raw_mode()?;
@@ -59,16 +97,36 @@ fn main() -> Result<(), Error> {
         Color::White,
     ];
 
+    let mut cursor = Cursor::new(Vec::new());
+    Opts::clap().write_help(&mut cursor)?;
+    let usage = String::from_utf8(cursor.into_inner())?;
+
     terminal.draw(|mut frame| {
         let size = frame.size();
+
         let text = vec![
-            Text::raw("Waiting for data...\n"),
-            Text::raw("CTRL-C to exit\n"),
+            Text::styled(
+                "Waiting for data...\n\n\n",
+                Style::default().fg(Color::Yellow),
+            ),
+            Text::raw(usage),
         ];
-        Paragraph::new(text.iter())
-            .block(Block::default().title("ttyplot-rs").borders(Borders::ALL))
-            .alignment(Alignment::Center)
+
+        Block::default()
+            .title(env!("CARGO_PKG_NAME"))
+            .borders(Borders::ALL)
             .render(&mut frame, size);
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .margin(MARGIN)
+            .constraints([Constraint::Percentage(100)].as_ref())
+            .split(size);
+
+        Paragraph::new(text.iter())
+            .alignment(Alignment::Left)
+            .wrap(false)
+            .render(&mut frame, chunks[0]);
     })?;
 
     loop {
@@ -94,7 +152,11 @@ fn main() -> Result<(), Error> {
 
             terminal.draw(|mut frame| {
                 let size = frame.size();
-                let width = size.width as i32 - 8; // y_label + margins = 8
+                let width = if let Some(width) = opts.width {
+                    width as i32
+                } else {
+                    size.width as i32 - MARGIN as i32 // y_label + margins = 8
+                };
                 let x_win = if count - width > 0 {
                     [(count - width) as f64, count as f64] // [x_min, x_max]
                 } else {
@@ -158,6 +220,14 @@ fn main() -> Result<(), Error> {
                     ));
                 }
 
+                // override with user options
+                if let Some(min) = opts.min {
+                    y_win[0] = min;
+                }
+                if let Some(max) = opts.max {
+                    y_win[1] = max;
+                }
+
                 // make labels
                 let mut x_labels: Vec<String> = Vec::new();
                 let mut y_labels: Vec<String> = Vec::new();
@@ -184,7 +254,11 @@ fn main() -> Result<(), Error> {
 
                 // plot
                 Chart::default()
-                    .block(Block::default().title("ttyplot-rs").borders(Borders::ALL))
+                    .block(
+                        Block::default()
+                            .title(env!("CARGO_PKG_NAME"))
+                            .borders(Borders::ALL),
+                    )
                     .x_axis(Axis::default().bounds(x_win).labels(&x_labels))
                     .y_axis(Axis::default().bounds(y_win).labels(&y_labels))
                     .datasets(&datasets)
