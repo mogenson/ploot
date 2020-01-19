@@ -2,7 +2,7 @@
 
 Plot streaming data from stdin to a tty terminal. Useful for displaying data piped from a serial port or long running process.
 
-<img src="./demo.svg" alt="Demo cast piping output from feed_input.rs into ttyplot-rs">
+![Example](./demo.svg)
 
 ## Install
 
