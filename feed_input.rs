@@ -1,22 +1,17 @@
 use std::f64::consts::PI;
+use std::io::{stdout, Write};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 fn main() {
-    sleep(Duration::from_millis(1000));
+    sleep(Duration::from_millis(1000)); // wait one second before streaming data
     let start = Instant::now();
-    let mut i: usize = 0;
 
     loop {
         let x = PI * start.elapsed().as_secs_f64();
-        let s = 2.0 * x.sin();
-        let c = x.cos();
-        if i % 200 == 0 {
-            println!("{:.3} {:.3} {:.3}", s, c, 1.333); // 3rd blip every now and then
-        } else {
-            println!("{:.3} {:.3}", s, c); // just sine and cosine
+        if let Err(_) = writeln!(stdout(), "{:.3} {:.3}", 2.0 * x.sin(), x.cos()) {
+            break;
         }
-        i += 1;
         sleep(Duration::from_millis(20));
     }
 }
