@@ -1,6 +1,7 @@
 use float_pretty_print::PrettyPrintFloat as ppf;
 use std::cmp::max;
 use std::f64;
+use std::f64::{MAX, MIN};
 use std::io::{stdin, stdout, Cursor, Read};
 use std::result::Result;
 use std::sync::mpsc::{channel, Receiver};
@@ -170,7 +171,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     [0.0, width as f64]
                 };
-                let mut y_win = [0.0f64; 2]; // [y_min, y_max]
+                let mut y_win = [MAX, MIN]; // [y_min, y_max]
 
                 // use legends for data statistics
                 let mut legends: Vec<String> = Vec::new();
@@ -202,8 +203,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     // legend with min, max, avg
                     let mut sum: f64 = 0.0;
-                    let mut min: f64 = 0.0;
-                    let mut max: f64 = 0.0;
+                    let mut min: f64 = MAX;
+                    let mut max: f64 = MIN;
 
                     for p in &data[i] {
                         sum += p.1;
