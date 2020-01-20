@@ -16,8 +16,6 @@ use tui::style::{Color, Style};
 use tui::widgets::{Axis, Block, Borders, Chart, Dataset, Marker, Paragraph, Text, Widget};
 use tui::Terminal;
 
-const MARGIN: u16 = 8;
-
 #[derive(StructOpt)]
 #[structopt(about = "Plot streaming data from stdin to a tty terminal. \
                      Useful for displaying data piped from a serial port or long running process. \
@@ -55,13 +53,12 @@ fn reader(stream: impl Read + Send + Sync + 'static) -> Receiver<Result<u8, std:
             }
         }
     });
-
     rx
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // parse command line arguments
     let opts: Opts = Opts::from_args();
-
     if opts.completions {
         println!(
             "Generating Bash tab-completion script: {}.bash",
@@ -71,9 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    //    return Ok(());
-
-    // Terminal initialization
+    // terminal initialization
     let stdout = stdout();
     let stdout = stdout.lock().into_raw_mode()?;
     let stdout = AlternateScreen::from(stdout);
@@ -81,12 +76,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(backend)?;
     terminal.hide_cursor()?;
 
+    // internal app variables
     let mut count: i32 = 0;
     let pipe = reader(stdin());
     let tty = reader(get_tty()?);
     let mut input = String::new();
-
     let mut data: Vec<Vec<(f64, f64)>> = Vec::new();
+
+    // color constants
     let colors = vec![
         Color::Cyan,
         Color::Yellow,
@@ -97,13 +94,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Color::White,
     ];
 
+    // write help message to string
     let mut cursor = Cursor::new(Vec::new());
     Opts::clap().write_help(&mut cursor)?;
     let usage = String::from_utf8(cursor.into_inner())?;
 
+    // draw to center of terminal while waiting for data
     terminal.draw(|mut frame| {
         let size = frame.size();
-
         let text = vec![
             Text::styled(
                 "Waiting for data...\n\n\n",
@@ -119,7 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .margin(MARGIN)
+            .margin(5)
             .constraints([Constraint::Percentage(100)].as_ref())
             .split(size);
 
@@ -129,43 +127,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .render(&mut frame, chunks[0]);
     })?;
 
+    // main app loop
     loop {
+        // exit loop if ctrl-c pressed
         if let Ok(Ok(0x03)) = tty.try_recv() {
-            break; // got ctrl-c
+            break;
         }
 
+        // read char from piped stdin
         if let Ok(Ok(c)) = pipe.try_recv() {
             if c != b'\n' {
                 input.push(c as char);
-                continue;
+                continue; // add char to string and wait for next
             }
 
-            // parse input string as vector of floats
-            let new_data = input
+            // parse input string as vector of floats, silence format errors
+            let new_data: Vec<f64> = input
                 .split_whitespace()
-                .filter_map(|s| s.parse::<f64>().ok())
-                .collect::<Vec<f64>>();
+                .filter_map(|s| s.parse().ok())
+                .collect();
+
+            // bail if no new data
             if new_data.is_empty() {
                 continue;
             }
-            input.clear();
 
+            input.clear(); // reset input string
+
+            // plot new data
             terminal.draw(|mut frame| {
+                // pick terminal width or use specified width
                 let size = frame.size();
                 let width = if let Some(width) = opts.width {
                     width as i32
                 } else {
-                    size.width as i32 - MARGIN as i32 // y_label + margins = 8
+                    size.width as i32 - 8 // y_label + margins = 8
                 };
+
+                // display window width and height
                 let x_win = if count - width > 0 {
                     [(count - width) as f64, count as f64] // [x_min, x_max]
                 } else {
                     [0.0, width as f64]
                 };
-
                 let mut y_win = [0.0f64; 2]; // [y_min, y_max]
+
+                // use legends for data statistics
                 let mut legends: Vec<String> = Vec::new();
 
+                // format data for plotting
                 for i in 0..max(data.len(), new_data.len()) {
                     // trim old data points
                     if i < data.len() {
@@ -185,7 +195,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         data[i].push((count as f64, new_data[i]));
                     }
 
-                    // bail if empty
+                    // bail if series is empty
                     if data[i].is_empty() {
                         continue;
                     }
@@ -194,6 +204,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let mut sum: f64 = 0.0;
                     let mut min: f64 = 0.0;
                     let mut max: f64 = 0.0;
+
                     for p in &data[i] {
                         sum += p.1;
                         if p.1 < min {
@@ -213,7 +224,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     legends.push(format!(
                         "Cur: {:1.5} Min: {:1.5} Max: {:1.5} Avg: {:1.5}",
-                        ppf(data[i].last().unwrap().1),
+                        ppf(data[i].last().unwrap().1), // guaranteed to exist
                         ppf(min),
                         ppf(max),
                         ppf(sum / data[i].len() as f64)
@@ -264,7 +275,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .datasets(&datasets)
                     .render(&mut frame, size);
             })?;
-            count += 1;
+
+            count += 1; // increment current data count
         }
     }
 
