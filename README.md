@@ -45,7 +45,7 @@ $ cat /dev/ttyUSB0 | ttyplot-rs
 
 ```
 # CPU percentage
-$ sar 1 | awk '{ print 100.0-$NF; fflush(); } | ttyplot-rs 
+$ sar 1 | awk '{ print 100.0-$NF; fflush(); }' | ttyplot-rs 
 ```
 
 ```
