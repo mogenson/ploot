@@ -1,4 +1,5 @@
 /target
+**/*.csv
 **/*.rs.bk
 feed_input
 .gdb_history

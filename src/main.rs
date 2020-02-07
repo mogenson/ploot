@@ -2,7 +2,9 @@ use float_pretty_print::PrettyPrintFloat as ppf;
 use std::cmp::max;
 use std::f64;
 use std::f64::{MAX, MIN};
-use std::io::{stdin, stdout, Cursor, Read};
+use std::fs::File;
+use std::io::{prelude::*, stdin, stdout, Cursor, Read};
+use std::path::PathBuf;
 use std::result::Result;
 use std::sync::mpsc::{channel, Receiver};
 use std::thread;
@@ -41,6 +43,8 @@ struct Opts {
         help = "Lower bound of window (default: largest data point in window)"
     )]
     min: Option<f64>,
+    #[structopt(short, long, help = "Log received data to file in CSV format")]
+    file: Option<PathBuf>,
     #[structopt(long = "completions", help = "Generate Bash tab-completion script")]
     completions: bool,
 }
@@ -67,6 +71,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         Opts::clap().gen_completions(env!("CARGO_PKG_NAME"), Shell::Bash, ".");
         return Ok(());
+    }
+
+    // create log file
+    let mut log = None;
+    if let Some(path) = &opts.file {
+        log = Some(File::create(path)?);
     }
 
     // terminal initialization
@@ -137,9 +147,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // read char from piped stdin
         if let Ok(Ok(c)) = pipe.try_recv() {
+            input.push(c as char); // add char to string
             if c != b'\n' {
-                input.push(c as char);
-                continue; // add char to string and wait for next
+                continue; // keep adding data
             }
 
             // parse input string as vector of floats, silence format errors
@@ -151,6 +161,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // bail if no new data
             if new_data.is_empty() {
                 continue;
+            }
+
+            // log data
+            if let Some(log) = &mut log {
+                log.write_all(input.replace(" ", ",").as_bytes())?;
             }
 
             input.clear(); // reset input string
