@@ -1,4 +1,4 @@
-_ttyplot-rs() {
+_ploot() {
     local i cur prev opts cmds
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
@@ -9,8 +9,8 @@ _ttyplot-rs() {
     for i in ${COMP_WORDS[@]}
     do
         case "${i}" in
-            ttyplot-rs)
-                cmd="ttyplot-rs"
+            ploot)
+                cmd="ploot"
                 ;;
             
             *)
@@ -19,8 +19,8 @@ _ttyplot-rs() {
     done
 
     case "${cmd}" in
-        ttyplot-rs)
-            opts=" -h -V -w -M -m  --completions --help --version --width --max --min  "
+        ploot)
+            opts=" -h -V -w -M -m -f  --completions --help --version --width --max --min --file  "
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -51,6 +51,14 @@ _ttyplot-rs() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --file)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                    -f)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -62,4 +70,4 @@ _ttyplot-rs() {
     esac
 }
 
-complete -F _ttyplot-rs -o bashdefault -o default ttyplot-rs
+complete -F _ploot -o bashdefault -o default ploot
