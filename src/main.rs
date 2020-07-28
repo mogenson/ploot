@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::result::Result;
 use std::sync::mpsc::{channel, Receiver};
 use std::thread;
+use std::time::Duration;
 use structopt::clap::Shell;
 use structopt::StructOpt;
 use termion::get_tty;
@@ -294,6 +295,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             count += 1; // increment current data count
         }
+
+        thread::sleep(Duration::from_millis(5)); // yield to other processes
     }
 
     Ok(())
